@@ -1,0 +1,633 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MOVE OR DIE</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;height:100%;cursor:crosshair}
+  canvas{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;inset:0;pointer-events:none;font-family:'Press Start 2P',monospace;color:#111}
+  #top{position:absolute;top:14px;left:0;right:0;text-align:center;font-size:13px;color:#b3121a;text-shadow:0 0 8px rgba(255,0,0,.35)}
+  #big{position:absolute;top:34%;left:0;right:0;text-align:center;font-size:8vw;color:#e01018;letter-spacing:.05em;text-shadow:4px 4px 0 #1a0000, 0 0 30px rgba(255,20,20,.5)}
+  #sub{position:absolute;top:58%;left:0;right:0;text-align:center;font-size:14px;line-height:2;color:#222;text-shadow:1px 1px 0 #fff}
+  #cross{position:absolute;top:50%;left:50%;width:6px;height:6px;margin:-3px;background:#e01018;box-shadow:0 0 6px rgba(255,0,0,.8)}
+  #tsw{position:absolute;bottom:22px;left:50%;width:220px;margin-left:-110px;height:10px;background:rgba(0,0,0,.25);outline:2px solid rgba(0,0,0,.4)}
+  #tsf{height:100%;width:100%;background:#e01018}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<audio id="menuMusic" src="music/menu.wav" preload="auto" loop></audio>
+<audio id="gameMusic" src="music/game.wav" preload="auto" loop></audio>
+<div id="hud">
+  <div id="top"></div>
+  <div id="big">MOVE OR DIE</div>
+  <div id="sub">TIME MOVES WHEN YOU MOVE<br><br>WASD MOVE &nbsp; MOUSE AIM &nbsp; CLICK SHOOT<br>ONE HIT KILLS. EVERYONE. INCLUDING YOU.<br><br>CLICK TO BEGIN</div>
+  <div id="cross" class="hide"></div>
+  <div id="tsw" class="hide"><div id="tsf"></div></div>
+</div>
+<script>
+"use strict";
+// ---------------- level data (shared JS <-> GLSL) ----------------
+const COLS = [ // x, z, half, height
+  [6,7,1.2,3.2],[-8,5,1.5,4.6],[9,-7,1.0,2.6],[-6,-9,1.3,3.8],
+  [0,12,2.4,2.0],[-13,-2,1.0,5.5],[12,2,0.9,4.2],[2,-13,1.8,2.6],
+  [-3,-4,0.7,1.6],[14,-13,2.2,6.5],[-14,11,1.6,3.4],[16,14,1.4,5.0]
+];
+const ARENA = 24.0, MAXE = 8, MAXB = 12, MAXP = 640, TF = 0.7002; // tan(35deg)
+const glslCols = COLS.map(c=>`q1=sdBox(p-vec3(${c[0]}.0,${(c[3]/2).toFixed(3)},${c[1]}.0),vec3(${c[2].toFixed(3)},${(c[3]/2).toFixed(3)},${c[2].toFixed(3)})); if(q1<d){d=q1;m=1.0;}`).join("\n  ");
+
+// ---------------- GL boilerplate ----------------
+const cv = document.getElementById("c");
+const gl = cv.getContext("webgl2",{alpha:false,antialias:false});
+function sh(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(s));throw new Error("shader");}return s;}
+function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)){console.error(gl.getProgramInfoLog(p));throw new Error("link");} return p;}
+
+const FSQ_VS = `#version 300 es
+layout(location=0) in vec2 aP; void main(){ gl_Position=vec4(aP,0.0,1.0); }`;
+
+// ---------------- scene: raymarched world ----------------
+const SCENE_FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime;
+uniform vec3 uCamP; uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
+uniform vec4 uEn[${MAXE}];  // xyz base pos, w yaw
+uniform vec4 uEs[${MAXE}];  // x anim, y spawnGlow, z active, w unused
+uniform vec4 uBl[${MAXB}];  // xyz pos, w active
+out vec4 outC;
+float sdBox(vec3 p, vec3 b){ vec3 d=abs(p)-b; return length(max(d,0.0))+min(max(d.x,max(d.y,d.z)),0.0); }
+vec3 rotY(vec3 p, float a){ float c=cos(a),s=sin(a); return vec3(c*p.x-s*p.z,p.y,s*p.x+c*p.z); }
+vec2 map(vec3 p){
+  float d = p.y; float m = 0.0; float q1;
+  float w = ${ARENA.toFixed(1)} - max(abs(p.x),abs(p.z));
+  if(w<d){d=w;m=1.0;}
+  ${glslCols}
+  for(int i=0;i<${MAXE};i++){
+    if(uEs[i].z<0.5) continue;
+    vec3 q = p - uEn[i].xyz;
+    float bnd = length(q-vec3(0.0,1.0,0.0))-1.7;
+    if(bnd>d) continue;
+    q = rotY(q, uEn[i].w);
+    float sw = sin(uEs[i].x)*0.5;
+    float e = sdBox(q-vec3(0.0,1.05,0.0), vec3(0.30,0.38,0.16));
+    e = min(e, sdBox(q-vec3(0.0,1.64,0.0), vec3(0.15,0.15,0.14)));
+    e = min(e, sdBox(q-vec3(0.17,0.36,sw*0.22), vec3(0.10,0.36,0.11)));
+    e = min(e, sdBox(q-vec3(-0.17,0.36,-sw*0.22), vec3(0.10,0.36,0.11)));
+    e = min(e, sdBox(q-vec3(0.26,1.28,0.30), vec3(0.07,0.08,0.34)));
+    if(e<d){ d=e; m=2.0+uEs[i].y*0.8; }
+  }
+  for(int i=0;i<${MAXB};i++){
+    if(uBl[i].w<0.5) continue;
+    float b2 = sdBox(p-uBl[i].xyz, vec3(0.13));
+    if(b2<d){ d=b2; m=3.0; }
+  }
+  return vec2(d,m);
+}
+vec2 march(vec3 ro, vec3 rd, float tmax, int steps){
+  float t=0.02; float m=-1.0;
+  for(int i=0;i<128;i++){
+    if(i>=steps) break;
+    vec2 h = map(ro+rd*t);
+    if(h.x < 0.0016*t+0.0012){ m=h.y; break; }
+    t += h.x*0.92;
+    if(t>tmax){ m=-1.0; break; }
+  }
+  return vec2(t,m);
+}
+vec3 nrm(vec3 p){
+  vec2 e=vec2(0.0018,-0.0018);
+  return normalize(e.xyy*map(p+e.xyy).x + e.yyx*map(p+e.yyx).x + e.yxy*map(p+e.yxy).x + e.xxx*map(p+e.xxx).x);
+}
+const vec3 L = normalize(vec3(0.5,0.85,0.35));
+float shad(vec3 ro){
+  float res=1.0, t=0.04;
+  for(int i=0;i<20;i++){
+    float h = map(ro+L*t).x;
+    res = min(res, 11.0*h/t);
+    t += clamp(h,0.04,1.6);
+    if(res<0.02||t>26.0) break;
+  }
+  return clamp(res,0.0,1.0);
+}
+float ao(vec3 p, vec3 n){
+  float o=0.0,s=1.0;
+  for(int i=1;i<=4;i++){ float h=0.07*float(i); o += (h-map(p+n*h).x)*s; s*=0.6; }
+  return clamp(1.0-2.0*o,0.0,1.0);
+}
+vec3 albedo(float m, vec3 p, out float emis){
+  emis=0.0;
+  if(m<0.5){
+    vec2 f = abs(fract(p.xz*0.5)-0.5);
+    float line = smoothstep(0.028,0.012,min(f.x,f.y));
+    return mix(vec3(0.93,0.94,0.97), vec3(0.62,0.68,0.80), line*0.55);
+  } else if(m<1.5){
+    return vec3(0.96,0.965,0.99);
+  } else if(m<2.95){
+    emis = 0.35 + (m-2.0)*2.2;
+    return vec3(0.92,0.05,0.09);
+  }
+  emis = 3.0; return vec3(1.0,0.28,0.10);
+}
+vec3 sky(vec3 rd){
+  vec3 c = mix(vec3(0.97,0.975,1.0), vec3(0.72,0.80,0.95), clamp(rd.y,0.0,1.0));
+  c += pow(clamp(dot(rd,L),0.0,1.0),64.0)*0.5;
+  return c;
+}
+vec3 shade(vec3 p, vec3 n, float m, vec3 rd){
+  float emis; vec3 alb = albedo(m,p,emis);
+  float dif = clamp(dot(n,L),0.0,1.0);
+  float s = shad(p+n*0.04);
+  float a = ao(p,n);
+  vec3 col = alb*(0.36+0.64*dif*s)*a + alb*emis;
+  col += vec3(1.0)*pow(clamp(dot(reflect(rd,n),L),0.0,1.0),24.0)*s*0.35;
+  return col;
+}
+void main(){
+  vec2 uv = (gl_FragCoord.xy*2.0-uRes)/uRes.y;
+  vec3 ro = uCamP;
+  vec3 rd = normalize(uFwd + uv.x*${TF}*uRight + uv.y*${TF}*uUp);
+  vec2 h = march(ro,rd,70.0,110);
+  vec3 col; float t=h.x;
+  if(h.y<-0.5){ col = sky(rd); t=70.0; }
+  else {
+    vec3 p = ro+rd*t; vec3 n = nrm(p);
+    col = shade(p,n,h.y,rd);
+    if(h.y<0.5){ // raytraced floor reflection bounce
+      vec3 rr = reflect(rd,n);
+      vec2 h2 = march(p+n*0.03, rr, 40.0, 56);
+      vec3 rc;
+      if(h2.y<-0.5) rc = sky(rr);
+      else { float em; vec3 p2=p+rr*h2.x; vec3 a2=albedo(h2.y,p2,em);
+             rc = a2*(0.45+0.55*clamp(dot(nrm(p2),L),0.0,1.0)) + a2*em; }
+      col = mix(col, rc, 0.16);
+    }
+    col = mix(col, vec3(0.97,0.975,1.0), 1.0-exp(-t*0.016));
+  }
+  outC = vec4(col, clamp(t/80.0,0.0,1.0));
+}`;
+
+// ---------------- post: pixel CRT / time tint ----------------
+const POST_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uScene; uniform vec2 uRes; uniform vec2 uLow;
+uniform float uTS; uniform float uFlash; uniform float uDead; uniform float uKick;
+out vec4 outC;
+void main(){
+  vec2 uv = gl_FragCoord.xy/uRes;
+  float off = (uKick*2.4+0.4)/uLow.x;
+  vec3 col;
+  col.r = texture(uScene, uv+vec2(off,0.0)).r;
+  col.g = texture(uScene, uv).g;
+  col.b = texture(uScene, uv-vec2(off,0.0)).b;
+  vec3 cold = mix(vec3(dot(col,vec3(0.333))), col, 0.45)*vec3(0.78,0.90,1.22);
+  col = mix(cold, col, clamp(uTS,0.0,1.0));
+  vec2 v = uv*(1.0-uv);
+  col *= 0.35+0.65*pow(v.x*v.y*18.0,0.28);
+  col *= 0.94+0.06*sin(uv.y*uLow.y*6.28318*0.5);
+  col += uFlash*vec3(1.0,0.92,0.8)*0.65;
+  col = mix(col, vec3(0.62,0.03,0.05), uDead*0.75);
+  outC = vec4(col,1.0);
+}`;
+
+// ---------------- particles: pixel-snapped point cubes ----------------
+const PART_VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aCol; layout(location=2) in float aSize;
+uniform vec3 uCamP; uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
+uniform vec2 uLow; uniform float uScale; uniform float uAspect;
+out vec3 vCol; out float vDist;
+void main(){
+  vec3 rel = aPos-uCamP;
+  float zv = dot(uFwd,rel);
+  vCol = aCol; vDist = length(rel);
+  if(zv<0.06){ gl_Position=vec4(2.0,2.0,2.0,1.0); gl_PointSize=1.0; return; }
+  vec2 ndc = vec2(dot(uRight,rel)/(zv*${TF}*uAspect), dot(uUp,rel)/(zv*${TF}));
+  ndc = (floor((ndc*0.5+0.5)*uLow)+0.5)/uLow*2.0-1.0;
+  float px = max(1.0, floor(aSize/(zv*${TF}*2.0)*uLow.y));
+  gl_PointSize = px*uScale;
+  gl_Position = vec4(ndc,0.0,1.0);
+}`;
+const PART_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uScene; uniform vec2 uRes;
+in vec3 vCol; in float vDist; out vec4 outC;
+void main(){
+  float sceneT = texture(uScene, gl_FragCoord.xy/uRes).a*80.0;
+  if(vDist > sceneT+0.55) discard;
+  outC = vec4(vCol,1.0);
+}`;
+
+const pScene = prog(FSQ_VS,SCENE_FS), pPost = prog(FSQ_VS,POST_FS), pPart = prog(PART_VS,PART_FS);
+function U(p,n){return gl.getUniformLocation(p,n);}
+const quad = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const pbuf = gl.createBuffer();
+const pdata = new Float32Array(MAXP*7);
+
+let LW=480,LH=270, fbo=gl.createFramebuffer(), fbt=gl.createTexture();
+function sizeAll(){
+  cv.width=innerWidth; cv.height=innerHeight;
+  LH=270; LW=Math.max(2,Math.round(LH*cv.width/cv.height/2)*2);
+  gl.bindTexture(gl.TEXTURE_2D,fbt);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,LW,LH,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,fbt,0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+}
+sizeAll(); addEventListener("resize",sizeAll);
+
+// ---------------- game state ----------------
+const P = {x:0,y:1.6,z:-17,yaw:0,pitch:0,vx:0,vz:0,bob:0};
+let enemies=[], ebullets=[], parts=[];
+let state="title", wave=0, kills=0, best=+(localStorage.vcBest||0);
+let ts=1, tsBoost=0, turnKick=0, flash=0, shake=0, kick=0, dead=0, cool=0, gen=0;
+const keys={};
+const $=id=>document.getElementById(id);
+const menuMusic=$("menuMusic"), gameMusic=$("gameMusic");
+
+function rnd(a,b){return a+Math.random()*(b-a);}
+function say(w,d){ setTimeout(()=>{try{const u=new SpeechSynthesisUtterance(w);u.rate=0.7;u.pitch=0.3;u.volume=1;speechSynthesis.speak(u);}catch(e){}},d||0); }
+function setMusic(track){
+  const active=track==="game" ? gameMusic : menuMusic;
+  const inactive=track==="game" ? menuMusic : gameMusic;
+  inactive.pause(); inactive.currentTime=0;
+  active.play().catch(()=>{});
+}
+
+// ---------------- audio (all procedural) ----------------
+let actx=null,master=null,noiseB=null,droneG=null,droneF=null;
+function initAudio(){
+  if(actx) return;
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value=0.5; master.connect(actx.destination);
+  noiseB = actx.createBuffer(1,actx.sampleRate,actx.sampleRate);
+  const d=noiseB.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  const o=actx.createOscillator(); o.type="sawtooth"; o.frequency.value=48;
+  droneF=actx.createBiquadFilter(); droneF.type="lowpass"; droneF.frequency.value=220;
+  droneG=actx.createGain(); droneG.gain.value=0;
+  o.connect(droneF).connect(droneG).connect(master); o.start();
+}
+function burst(dur,f0,f1,vol,type){
+  if(!actx) return; const t=actx.currentTime;
+  const s=actx.createBufferSource(); s.buffer=noiseB; s.loop=true;
+  const f=actx.createBiquadFilter(); f.type=type||"lowpass";
+  f.frequency.setValueAtTime(f0,t); f.frequency.exponentialRampToValueAtTime(Math.max(f1,20),t+dur);
+  const g=actx.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  s.connect(f).connect(g).connect(master); s.start(t); s.stop(t+dur+0.02);
+}
+function blip(f0,f1,dur,vol,type){
+  if(!actx) return; const t=actx.currentTime;
+  const o=actx.createOscillator(); o.type=type||"square";
+  o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(Math.max(f1,20),t+dur);
+  const g=actx.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(g).connect(master); o.start(t); o.stop(t+dur+0.02);
+}
+const sfxShoot=()=>{burst(0.2,4200,280,0.7);blip(170,42,0.13,0.5);};
+const sfxShatter=()=>{burst(0.4,2400,500,0.6,"bandpass");blip(rnd(700,1100),rnd(1400,2000),0.08,0.25,"sine");blip(660,990,0.07,0.3);};
+const sfxSpark=()=>burst(0.08,3000,1200,0.25,"highpass");
+const sfxDie=()=>{burst(1.2,900,40,0.9);blip(120,25,1.0,0.6,"sawtooth");};
+const sfxStep=()=>blip(90,60,0.05,0.06,"triangle");
+
+// ---------------- particles ----------------
+function addPart(x,y,z,vx,vy,vz,life,size,r,g,b,grav){
+  if(parts.length>=MAXP) parts.shift();
+  parts.push({x,y,z,vx,vy,vz,life,tl:life,size,r,g,b,grav});
+}
+function shatter(x,y,z,n){
+  for(let i=0;i<n;i++){
+    const a=rnd(0,6.283), e=rnd(-1,1), sp=rnd(2,9);
+    const c=rnd(0.6,1.0);
+    addPart(x+rnd(-0.3,0.3),y+rnd(-0.6,0.6),z+rnd(-0.3,0.3),
+      Math.cos(a)*sp*Math.sqrt(1-e*e), rnd(1,7), Math.sin(a)*sp*Math.sqrt(1-e*e),
+      rnd(0.8,1.7), rnd(0.06,0.17), c, c*rnd(0.03,0.12), c*rnd(0.05,0.15), 1);
+  }
+}
+function sparks(x,y,z,n){
+  for(let i=0;i<n;i++){
+    const a=rnd(0,6.283);
+    addPart(x,y,z,Math.cos(a)*rnd(1,4),rnd(0.5,3),Math.sin(a)*rnd(1,4),
+      rnd(0.2,0.5),rnd(0.04,0.08),1.0,0.85,0.4,1);
+  }
+}
+function tracer(ox,oy,oz,dx,dy,dz,len){
+  const n=Math.min(40,Math.floor(len*2.2));
+  for(let i=0;i<n;i++){
+    const t=(i+rnd(0,1))/n*len;
+    addPart(ox+dx*t,oy+dy*t,oz+dz*t,rnd(-0.2,0.2),rnd(-0.2,0.2),rnd(-0.2,0.2),
+      rnd(0.25,0.5),0.05,1.0,0.95,0.7,0);
+  }
+}
+
+// ---------------- collision helpers ----------------
+function colBoxes(){ const r=[]; for(const c of COLS) r.push([c[0]-c[2],0,c[1]-c[2], c[0]+c[2],c[3],c[1]+c[2]]); return r; }
+const CBOX = colBoxes();
+function rayBox(ro,rd,b){
+  let t0=0.0,t1=1e9;
+  for(let i=0;i<3;i++){
+    const inv=1/rd[i]; let a=(b[i]-ro[i])*inv, bb=(b[i+3]-ro[i])*inv;
+    if(a>bb){const tmp=a;a=bb;bb=tmp;}
+    if(a>t0)t0=a; if(bb<t1)t1=bb;
+  }
+  return t0<=t1 && t1>0 ? Math.max(t0,0.0001) : -1;
+}
+function pushCircle(px,pz,r){
+  for(const b of CBOX){
+    const nx=Math.max(b[0],Math.min(px,b[3])), nz=Math.max(b[2],Math.min(pz,b[5]));
+    let dx=px-nx, dz=pz-nz; const d2=dx*dx+dz*dz;
+    if(d2<r*r){
+      const d=Math.sqrt(d2)||0.001; const push=(r-d)/d;
+      px+=dx*push; pz+=dz*push;
+    }
+  }
+  const lim=ARENA-0.6;
+  px=Math.max(-lim,Math.min(lim,px)); pz=Math.max(-lim,Math.min(lim,pz));
+  return [px,pz];
+}
+function pointInCols(x,y,z,pad){
+  if(Math.abs(x)>ARENA-0.1||Math.abs(z)>ARENA-0.1||y<0.02) return true;
+  for(const b of CBOX)
+    if(x>b[0]-pad&&x<b[3]+pad&&y>b[1]-pad&&y<b[4]+pad&&z>b[2]-pad&&z<b[5]+pad) return true;
+  return false;
+}
+
+// ---------------- enemies / waves ----------------
+function spawnWave(n){
+  enemies=[]; ebullets=[];
+  const count=Math.min(2+n,MAXE);
+  for(let i=0;i<count;i++){
+    let x=0,z=0,ok=false;
+    for(let t=0;t<40&&!ok;t++){
+      const a=rnd(0,6.283), r=rnd(10,20);
+      x=Math.cos(a)*r; z=Math.sin(a)*r;
+      ok = Math.abs(x)<ARENA-2 && Math.abs(z)<ARENA-2 &&
+           (x-P.x)**2+(z-P.z)**2>64 && !pointInCols(x,1,z,1.2);
+    }
+    enemies.push({x,z,yaw:0,phase:rnd(0,6),fire:rnd(1.2,2.5),spawn:0,alive:true,wob:rnd(0,6)});
+  }
+}
+function startGame(){
+  gen++; wave=1; kills=0; dead=0; state="play";
+  P.x=0;P.z=-17;P.yaw=0;P.pitch=0;P.vx=0;P.vz=0;
+  setMusic("game");
+  parts=[]; spawnWave(wave);
+  $("big").textContent=""; $("sub").textContent="";
+  $("cross").classList.remove("hide"); $("tsw").classList.remove("hide");
+  bigMsg("WAVE 1",900);
+  say("MOVE",50); say("OR DIE",600);
+}
+let bigTimer=0;
+function bigMsg(t,ms){ $("big").textContent=t; clearTimeout(bigTimer); bigTimer=setTimeout(()=>{if(state==="play")$("big").textContent="";},ms); }
+function nextWave(){
+  const g=gen; wave++;
+  bigMsg("MOVE",520); say("MOVE",0);
+  setTimeout(()=>{ if(gen!==g||state!=="play")return; bigMsg("OR DIE",520); say("OR DIE",0); },560);
+  setTimeout(()=>{ if(gen!==g||state!=="play")return; bigMsg("WAVE "+wave,800); spawnWave(wave); },1300);
+}
+function playerDie(){
+  if(state!=="play")return;
+  state="dead"; sfxDie(); say("SHATTERED",200);
+  setMusic("menu");
+  best=Math.max(best,kills); localStorage.vcBest=best;
+  $("big").textContent="SHATTERED";
+  $("sub").innerHTML="KILLS "+kills+" &nbsp; BEST "+best+"<br><br>CLICK TO REWIND";
+}
+
+// ---------------- input ----------------
+addEventListener("keydown",e=>{keys[e.code]=true; if(e.code==="KeyR"&&state!=="title")startGame();});
+addEventListener("keyup",e=>{keys[e.code]=false;});
+cv.addEventListener("click",()=>{
+  initAudio(); if(actx.state==="suspended")actx.resume();
+  if(document.pointerLockElement!==cv){ cv.requestPointerLock(); }
+  if(state==="title"||state==="dead"){ startGame(); return; }
+});
+addEventListener("mousemove",e=>{
+  if(document.pointerLockElement!==cv)return;
+  P.yaw += e.movementX*0.0024;
+  P.pitch = Math.max(-1.45,Math.min(1.45,P.pitch - e.movementY*0.0024));
+  turnKick = Math.min(0.22, turnKick + Math.abs(e.movementX)*0.0005 + Math.abs(e.movementY)*0.0005);
+});
+addEventListener("mousedown",e=>{ if(e.button===0&&state==="play"&&document.pointerLockElement===cv) shoot(); });
+
+function basis(){
+  const cy=Math.cos(P.yaw),sy=Math.sin(P.yaw),cp=Math.cos(P.pitch),sp=Math.sin(P.pitch);
+  const f=[sy*cp,sp,cy*cp], r=[cy,0,-sy];
+  const u=[f[1]*r[2]-f[2]*r[1], f[2]*r[0]-f[0]*r[2], f[0]*r[1]-f[1]*r[0]];
+  return {f,r,u};
+}
+function shoot(){
+  if(cool>0)return;
+  cool=0.26; flash=1; shake=0.35; tsBoost=Math.min(0.6,tsBoost+0.45); kick=Math.min(1,kick+0.4);
+  sfxShoot();
+  const {f,r,u}=basis();
+  const ro=[P.x,P.y,P.z];
+  let tWall=70;
+  for(const b of CBOX){ const t=rayBox(ro,f,b); if(t>0&&t<tWall)tWall=t; }
+  for(const b of [[-ARENA,-2,-ARENA-1,ARENA,9,-ARENA],[-ARENA,-2,ARENA,ARENA,9,ARENA+1],[-ARENA-1,-2,-ARENA,-ARENA,9,ARENA],[ARENA,-2,-ARENA,ARENA+1,9,ARENA]]){
+    const t=rayBox(ro,f,b); if(t>0&&t<tWall)tWall=t;
+  }
+  if(f[1]<-0.001){ const t=(0-P.y)/f[1]; if(t>0&&t<tWall)tWall=t; }
+  let hit=-1,hitT=tWall;
+  enemies.forEach((e,i)=>{
+    if(!e.alive)return;
+    const by=-1.9*(1-Math.min(1,e.spawn));
+    const t=rayBox(ro,f,[e.x-0.5,by,e.z-0.5,e.x+0.5,by+1.9,e.z+0.5]);
+    if(t>0&&t<hitT){hitT=t;hit=i;}
+  });
+  const mx=P.x+f[0]*0.5+r[0]*0.14-u[0]*0.1, my=P.y+f[1]*0.5-0.08, mz=P.z+f[2]*0.5+r[2]*0.14;
+  tracer(mx,my,mz,f[0],f[1],f[2],hitT-0.4);
+  if(hit>=0){
+    const e=enemies[hit]; e.alive=false; kills++;
+    shatter(e.x,1.1,e.z,64); sfxShatter(); kick=1;
+    if(enemies.every(a=>!a.alive)) nextWave();
+  } else if(hitT<69){
+    sparks(P.x+f[0]*hitT,P.y+f[1]*hitT,P.z+f[2]*hitT,10); sfxSpark();
+  }
+}
+
+// ---------------- update ----------------
+let stepT=0;
+function update(dt){
+  cool=Math.max(0,cool-dt); flash*=Math.pow(0.0001,dt); shake*=Math.pow(0.001,dt);
+  kick*=Math.pow(0.01,dt); turnKick*=Math.pow(0.0005,dt); tsBoost=Math.max(0,tsBoost-dt*2.2);
+  if(state!=="play"){ ts+= (0.55-ts)*Math.min(1,dt*4); if(state==="dead")dead=Math.min(1,dead+dt*2); return; }
+
+  // player movement (real time)
+  const cy=Math.cos(P.yaw),sy=Math.sin(P.yaw);
+  let ax=0,az=0;
+  if(keys.KeyW){ax+=sy;az+=cy;} if(keys.KeyS){ax-=sy;az-=cy;}
+  if(keys.KeyD){ax+=cy;az-=sy;} if(keys.KeyA){ax-=cy;az+=sy;}
+  const al=Math.hypot(ax,az)||1; ax/=al; az/=al;
+  const SPD=6.5, ACC=40;
+  P.vx += (ax*SPD-P.vx)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
+  P.vz += (az*SPD-P.vz)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
+  P.x+=P.vx*dt; P.z+=P.vz*dt;
+  [P.x,P.z]=pushCircle(P.x,P.z,0.55);
+  const speed=Math.hypot(P.vx,P.vz);
+  P.bob+=speed*dt*1.8; P.y=1.6+Math.sin(P.bob)*0.045*(speed/SPD);
+  stepT-=speed*dt; if(stepT<0&&speed>2){stepT=1.7;sfxStep();}
+
+  // SUPERHOT time
+  const target=0.055+0.945*Math.min(1,speed/SPD);
+  ts += (Math.min(1,target+tsBoost+turnKick)-ts)*Math.min(1,dt*11);
+  const wdt=dt*ts;
+
+  // enemies
+  for(const e of enemies){
+    if(!e.alive)continue;
+    e.spawn=Math.min(1,e.spawn+wdt/0.8);
+    if(e.spawn<1){e.phase+=wdt*2;continue;}
+    const dx=P.x-e.x,dz=P.z-e.z,dist=Math.hypot(dx,dz);
+    e.yaw=Math.atan2(dx,dz);
+    e.wob+=wdt*2.1;
+    const spd=2.1+wave*0.18;
+    if(dist>6.2){
+      const sx=Math.cos(e.wob)*0.7;
+      let nx=e.x+(dx/dist*spd + Math.cos(e.yaw)*sx)*wdt;
+      let nz=e.z+(dz/dist*spd - Math.sin(e.yaw)*sx)*wdt;
+      [nx,nz]=pushCircle(nx,nz,0.5); e.x=nx;e.z=nz;
+      e.phase+=wdt*9;
+    } else if(dist>1.35){
+      let nx=e.x+dx/dist*spd*0.35*wdt, nz=e.z+dz/dist*spd*0.35*wdt;
+      [nx,nz]=pushCircle(nx,nz,0.5); e.x=nx;e.z=nz;
+      e.phase+=wdt*4;
+      e.fire-=wdt;
+      if(e.fire<=0&&ebullets.length<MAXB){
+        e.fire=Math.max(0.8,1.8-wave*0.08);
+        const bx=e.x,by=1.5,bz=e.z;
+        const tdx=P.x-bx,tdy=P.y-0.15-by,tdz=P.z-bz;
+        const l=Math.hypot(tdx,tdy,tdz)||1;
+        ebullets.push({x:bx,y:by,z:bz,dx:tdx/l,dy:tdy/l,dz:tdz/l,life:7});
+        blip(300,120,0.12,0.25,"sawtooth");
+      }
+    } else { playerDie(); return; }
+    if(dist<1.35){ playerDie(); return; }
+  }
+
+  // enemy bullets
+  const BS=7.5;
+  for(let i=ebullets.length-1;i>=0;i--){
+    const b=ebullets[i];
+    b.x+=b.dx*BS*wdt; b.y+=b.dy*BS*wdt; b.z+=b.dz*BS*wdt; b.life-=wdt;
+    const hx=b.x-P.x,hz=b.z-P.z;
+    if(hx*hx+hz*hz<0.32&&Math.abs(b.y-1.2)<1.25){ playerDie(); return; }
+    if(b.life<=0||pointInCols(b.x,b.y,b.z,0.1)){
+      sparks(b.x,b.y,b.z,8); sfxSpark(); ebullets.splice(i,1);
+    }
+  }
+
+  // particles (world time — debris hangs in slow-mo)
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    if(p.grav)p.vy-=22*wdt;
+    p.x+=p.vx*wdt;p.y+=p.vy*wdt;p.z+=p.vz*wdt;
+    if(p.y<0.03&&p.vy<0){p.y=0.03;p.vy*=-0.35;p.vx*=0.7;p.vz*=0.7;}
+    p.life-=wdt;
+    if(p.life<=0)parts.splice(i,1);
+  }
+
+  // audio drone follows time dilation
+  if(droneG){ droneG.gain.value=(1-ts)*0.16; droneF.frequency.value=120+ts*600; }
+}
+
+// ---------------- render ----------------
+const enArr=new Float32Array(MAXE*4), esArr=new Float32Array(MAXE*4), blArr=new Float32Array(MAXB*4);
+function render(time){
+  const {f,r,u}=basis();
+  const shx=(Math.random()-0.5)*shake*0.1, shy=(Math.random()-0.5)*shake*0.1;
+  const cam=[P.x+r[0]*shx+u[0]*shy, P.y+shy*0.5, P.z+r[2]*shx+u[2]*shy];
+
+  enArr.fill(0); esArr.fill(0);
+  enemies.forEach((e,i)=>{
+    if(i>=MAXE)return;
+    const s=Math.min(1,e.spawn);
+    enArr[i*4]=e.x; enArr[i*4+1]=-1.9*(1-s); enArr[i*4+2]=e.z; enArr[i*4+3]=e.yaw;
+    esArr[i*4]=e.phase; esArr[i*4+1]=1-s; esArr[i*4+2]=e.alive?1:0;
+  });
+  blArr.fill(0);
+  ebullets.forEach((b,i)=>{ if(i>=MAXB)return; blArr[i*4]=b.x;blArr[i*4+1]=b.y;blArr[i*4+2]=b.z;blArr[i*4+3]=1; });
+
+  // pass 1: raymarch scene -> lowres FBO
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+  gl.viewport(0,0,LW,LH);
+  gl.useProgram(pScene);
+  gl.uniform2f(U(pScene,"uRes"),LW,LH);
+  gl.uniform1f(U(pScene,"uTime"),time);
+  gl.uniform3fv(U(pScene,"uCamP"),cam);
+  gl.uniform3fv(U(pScene,"uFwd"),f); gl.uniform3fv(U(pScene,"uRight"),r); gl.uniform3fv(U(pScene,"uUp"),u);
+  gl.uniform4fv(U(pScene,"uEn"),enArr); gl.uniform4fv(U(pScene,"uEs"),esArr); gl.uniform4fv(U(pScene,"uBl"),blArr);
+  gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+
+  // pass 2: post -> screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+  gl.viewport(0,0,cv.width,cv.height);
+  gl.useProgram(pPost);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,fbt);
+  gl.uniform1i(U(pPost,"uScene"),0);
+  gl.uniform2f(U(pPost,"uRes"),cv.width,cv.height);
+  gl.uniform2f(U(pPost,"uLow"),LW,LH);
+  gl.uniform1f(U(pPost,"uTS"),ts); gl.uniform1f(U(pPost,"uFlash"),flash);
+  gl.uniform1f(U(pPost,"uDead"),dead); gl.uniform1f(U(pPost,"uKick"),kick);
+  gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+
+  // pass 3: pixel particles on top (manual depth vs scene)
+  if(parts.length){
+    let n=0;
+    for(const p of parts){
+      const fade=p.life/p.tl;
+      pdata[n*7]=p.x; pdata[n*7+1]=p.y; pdata[n*7+2]=p.z;
+      pdata[n*7+3]=p.r; pdata[n*7+4]=p.g*Math.min(1,fade+0.4); pdata[n*7+5]=p.b*Math.min(1,fade+0.4);
+      pdata[n*7+6]=p.size*(0.4+0.6*fade);
+      n++;
+    }
+    gl.useProgram(pPart);
+    gl.uniform3fv(U(pPart,"uCamP"),cam);
+    gl.uniform3fv(U(pPart,"uFwd"),f); gl.uniform3fv(U(pPart,"uRight"),r); gl.uniform3fv(U(pPart,"uUp"),u);
+    gl.uniform2f(U(pPart,"uLow"),LW,LH);
+    gl.uniform1f(U(pPart,"uScale"),cv.height/LH);
+    gl.uniform1f(U(pPart,"uAspect"),cv.width/cv.height);
+    gl.uniform2f(U(pPart,"uRes"),cv.width,cv.height);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,fbt);
+    gl.uniform1i(U(pPart,"uScene"),0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);
+    gl.bufferData(gl.ARRAY_BUFFER,pdata.subarray(0,n*7),gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,28,0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,28,12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,1,gl.FLOAT,false,28,24);
+    gl.drawArrays(gl.POINTS,0,n);
+    gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2);
+  }
+
+  // HUD
+  if(state==="play"){
+    $("top").textContent="WAVE "+wave+"   KILLS "+kills+"   BEST "+best;
+    $("tsf").style.width=(ts*100).toFixed(0)+"%";
+    if(document.pointerLockElement!==cv){$("sub").textContent="CLICK TO RESUME";}
+    else if($("sub").textContent==="CLICK TO RESUME"){$("sub").textContent="";}
+  }
+}
+
+// ---------------- main loop ----------------
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  if(state!=="play"||document.pointerLockElement===cv) update(dt);
+  render(now/1000);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
