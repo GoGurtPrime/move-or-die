@@ -19,8 +19,9 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<audio id="menuMusic" src="music/menu.wav" preload="auto" loop></audio>
+<audio id="menuMusic" src="music/menu.wav" preload="auto" loop autoplay></audio>
 <audio id="gameMusic" src="music/game.wav" preload="auto" loop></audio>
+<audio id="emergencyMusic" src="music/emergency.wav" preload="auto" loop></audio>
 <div id="hud">
   <div id="top"></div>
   <div id="big">MOVE OR DIE</div>
@@ -36,7 +37,7 @@ const COLS = [ // x, z, half, height
   [0,12,2.4,2.0],[-13,-2,1.0,5.5],[12,2,0.9,4.2],[2,-13,1.8,2.6],
   [-3,-4,0.7,1.6],[14,-13,2.2,6.5],[-14,11,1.6,3.4],[16,14,1.4,5.0]
 ];
-const ARENA = 24.0, MAXE = 8, MAXB = 12, MAXP = 640, TF = 0.7002; // tan(35deg)
+const ARENA = 24.0, MAXE = 12, MAXB = 48, MAXP = 640, TF = 0.7002; // tan(35deg)
 const glslCols = COLS.map(c=>`q1=sdBox(p-vec3(${c[0]}.0,${(c[3]/2).toFixed(3)},${c[1]}.0),vec3(${c[2].toFixed(3)},${(c[3]/2).toFixed(3)},${c[2].toFixed(3)})); if(q1<d){d=q1;m=1.0;}`).join("\n  ");
 
 // ---------------- GL boilerplate ----------------
@@ -53,7 +54,7 @@ layout(location=0) in vec2 aP; void main(){ gl_Position=vec4(aP,0.0,1.0); }`;
 // ---------------- scene: raymarched world ----------------
 const SCENE_FS = `#version 300 es
 precision highp float;
-uniform vec2 uRes; uniform float uTime;
+uniform vec2 uRes; uniform float uTime; uniform float uEmergency;
 uniform vec3 uCamP; uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
 uniform vec4 uEn[${MAXE}];  // xyz base pos, w yaw
 uniform vec4 uEs[${MAXE}];  // x anim, y spawnGlow, z active, w unused
@@ -82,7 +83,7 @@ vec2 map(vec3 p){
   }
   for(int i=0;i<${MAXB};i++){
     if(uBl[i].w<0.5) continue;
-    float b2 = sdBox(p-uBl[i].xyz, vec3(0.13));
+    float b2 = length(p-uBl[i].xyz)-0.15;
     if(b2<d){ d=b2; m=3.0; }
   }
   return vec2(d,m);
@@ -120,19 +121,23 @@ float ao(vec3 p, vec3 n){
 }
 vec3 albedo(float m, vec3 p, out float emis){
   emis=0.0;
+  vec3 neon=0.5+0.5*cos(vec3(0.0,2.1,4.2)+uTime*5.0+p.xzy*1.7);
   if(m<0.5){
+    if(uEmergency>0.5){ emis=2.8; return neon*0.5; }
     vec2 f = abs(fract(p.xz*0.5)-0.5);
     float line = smoothstep(0.028,0.012,min(f.x,f.y));
     return mix(vec3(0.93,0.94,0.97), vec3(0.62,0.68,0.80), line*0.55);
   } else if(m<1.5){
+    if(uEmergency>0.5){ emis=4.0; return neon; }
     return vec3(0.96,0.965,0.99);
   } else if(m<2.95){
     emis = 0.35 + (m-2.0)*2.2;
     return vec3(0.92,0.05,0.09);
   }
-  emis = 3.0; return vec3(1.0,0.28,0.10);
+  emis = 3.0; return vec3(0.72,0.16,1.0);
 }
 vec3 sky(vec3 rd){
+  if(uEmergency>0.5) return vec3(0.002,0.001,0.006);
   vec3 c = mix(vec3(0.97,0.975,1.0), vec3(0.72,0.80,0.95), clamp(rd.y,0.0,1.0));
   c += pow(clamp(dot(rd,L),0.0,1.0),64.0)*0.5;
   return c;
@@ -143,6 +148,7 @@ vec3 shade(vec3 p, vec3 n, float m, vec3 rd){
   float s = shad(p+n*0.04);
   float a = ao(p,n);
   vec3 col = alb*(0.36+0.64*dif*s)*a + alb*emis;
+  if(uEmergency>0.5 && m<1.5) col=alb*emis+alb*pow(1.0-abs(dot(n,rd)),5.0)*5.0;
   col += vec3(1.0)*pow(clamp(dot(reflect(rd,n),L),0.0,1.0),24.0)*s*0.35;
   return col;
 }
@@ -174,7 +180,7 @@ void main(){
 const POST_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uScene; uniform vec2 uRes; uniform vec2 uLow;
-uniform float uTS; uniform float uFlash; uniform float uDead; uniform float uKick;
+uniform float uTS; uniform float uFlash; uniform float uDead; uniform float uKick; uniform float uEmergency; uniform float uTime;
 out vec4 outC;
 void main(){
   vec2 uv = gl_FragCoord.xy/uRes;
@@ -189,6 +195,10 @@ void main(){
   col *= 0.35+0.65*pow(v.x*v.y*18.0,0.28);
   col *= 0.94+0.06*sin(uv.y*uLow.y*6.28318*0.5);
   col += uFlash*vec3(1.0,0.92,0.8)*0.65;
+  if(uEmergency>0.5){
+    float pulse=0.45+0.55*sin(uTime*13.0);
+    col=mix(col,vec3(dot(col,vec3(0.2)))*0.04+col*1.9,pulse);
+  }
   col = mix(col, vec3(0.62,0.03,0.05), uDead*0.75);
   outC = vec4(col,1.0);
 }`;
@@ -245,22 +255,25 @@ function sizeAll(){
 sizeAll(); addEventListener("resize",sizeAll);
 
 // ---------------- game state ----------------
-const P = {x:0,y:1.6,z:-17,yaw:0,pitch:0,vx:0,vz:0,bob:0};
+const P = {x:0,y:1.6,z:-17,yaw:0,pitch:0,vx:0,vy:0,vz:0,bob:0,jump:0};
 let enemies=[], ebullets=[], parts=[];
 let state="title", wave=0, kills=0, best=+(localStorage.vcBest||0);
 let ts=1, tsBoost=0, turnKick=0, flash=0, shake=0, kick=0, dead=0, cool=0, gen=0;
+let emergency=false, previousEmergency=false;
 const keys={};
 const $=id=>document.getElementById(id);
-const menuMusic=$("menuMusic"), gameMusic=$("gameMusic");
+const menuMusic=$("menuMusic"), gameMusic=$("gameMusic"), emergencyMusic=$("emergencyMusic");
 
 function rnd(a,b){return a+Math.random()*(b-a);}
 function say(w,d){ setTimeout(()=>{try{const u=new SpeechSynthesisUtterance(w);u.rate=0.7;u.pitch=0.3;u.volume=1;speechSynthesis.speak(u);}catch(e){}},d||0); }
 function setMusic(track){
-  const active=track==="game" ? gameMusic : menuMusic;
-  const inactive=track==="game" ? menuMusic : gameMusic;
-  inactive.pause(); inactive.currentTime=0;
+  const active=track==="emergency" ? emergencyMusic : track==="game" ? gameMusic : menuMusic;
+  for(const music of [menuMusic,gameMusic,emergencyMusic]){
+    if(music!==active){music.pause();music.currentTime=0;}
+  }
   active.play().catch(()=>{});
 }
+setMusic("menu");
 
 // ---------------- audio (all procedural) ----------------
 let actx=null,master=null,noiseB=null,droneG=null,droneF=null;
@@ -292,6 +305,10 @@ function blip(f0,f1,dur,vol,type){
 }
 const sfxShoot=()=>{burst(0.2,4200,280,0.7);blip(170,42,0.13,0.5);};
 const sfxShatter=()=>{burst(0.4,2400,500,0.6,"bandpass");blip(rnd(700,1100),rnd(1400,2000),0.08,0.25,"sine");blip(660,990,0.07,0.3);};
+const sfxPew=()=>{blip(1100,260,0.09,0.3,"square");burst(0.08,2600,600,0.12,"bandpass");};
+function sfxChime(count){
+  for(let i=0;i<count;i++) setTimeout(()=>blip(720+i*210,1240+i*180,0.16,0.2,"sine"),i*72);
+}
 const sfxSpark=()=>burst(0.08,3000,1200,0.25,"highpass");
 const sfxDie=()=>{burst(1.2,900,40,0.9);blip(120,25,1.0,0.6,"sawtooth");};
 const sfxStep=()=>blip(90,60,0.05,0.06,"triangle");
@@ -315,6 +332,13 @@ function sparks(x,y,z,n){
     const a=rnd(0,6.283);
     addPart(x,y,z,Math.cos(a)*rnd(1,4),rnd(0.5,3),Math.sin(a)*rnd(1,4),
       rnd(0.2,0.5),rnd(0.04,0.08),1.0,0.85,0.4,1);
+  }
+}
+function impactBurst(x,y,z,n){
+  for(let i=0;i<n;i++){
+    const a=rnd(0,6.283), e=rnd(-1,1), speed=rnd(3,13);
+    addPart(x,y,z,Math.cos(a)*Math.sqrt(1-e*e)*speed,e*speed+rnd(-2,4),Math.sin(a)*Math.sqrt(1-e*e)*speed,
+      rnd(0.35,0.95),rnd(0.04,0.13),rnd(0.15,0.9),1.0,rnd(0.08,0.35),1);
   }
 }
 function tracer(ox,oy,oz,dx,dy,dz,len){
@@ -359,9 +383,19 @@ function pointInCols(x,y,z,pad){
 }
 
 // ---------------- enemies / waves ----------------
+function waveDifficulty(n){
+  const gradual=n-1, spike=Math.floor((n-1)/4);
+  return {
+    count:Math.min(3+Math.floor(gradual*0.85)+spike*2,MAXE),
+    speed:3.25+gradual*0.16+spike*0.8,
+    burst:3+n,
+    cadence:Math.max(0.52,1.8-gradual*0.055-spike*0.26)
+  };
+}
 function spawnWave(n){
   enemies=[]; ebullets=[];
-  const count=Math.min(2+n,MAXE);
+  const difficulty=waveDifficulty(n);
+  const count=difficulty.count;
   for(let i=0;i<count;i++){
     let x=0,z=0,ok=false;
     for(let t=0;t<40&&!ok;t++){
@@ -370,12 +404,13 @@ function spawnWave(n){
       ok = Math.abs(x)<ARENA-2 && Math.abs(z)<ARENA-2 &&
            (x-P.x)**2+(z-P.z)**2>64 && !pointInCols(x,1,z,1.2);
     }
-    enemies.push({x,z,yaw:0,phase:rnd(0,6),fire:rnd(1.2,2.5),spawn:0,alive:true,wob:rnd(0,6)});
+    enemies.push({x,z,yaw:0,phase:rnd(0,6),fire:rnd(0.8,difficulty.cadence),spawn:0,alive:true,wob:rnd(0,6),strafe:Math.random()<0.5?-1:1,shift:rnd(0.4,1.2)});
   }
 }
 function startGame(){
   gen++; wave=1; kills=0; dead=0; state="play";
-  P.x=0;P.z=-17;P.yaw=0;P.pitch=0;P.vx=0;P.vz=0;
+  emergency=false; previousEmergency=false;
+  P.x=0;P.z=-17;P.yaw=0;P.pitch=0;P.vx=0;P.vy=0;P.vz=0;P.jump=0;
   setMusic("game");
   parts=[]; spawnWave(wave);
   $("big").textContent=""; $("sub").textContent="";
@@ -386,10 +421,24 @@ function startGame(){
 let bigTimer=0;
 function bigMsg(t,ms){ $("big").textContent=t; clearTimeout(bigTimer); bigTimer=setTimeout(()=>{if(state==="play")$("big").textContent="";},ms); }
 function nextWave(){
-  const g=gen; wave++;
-  bigMsg("MOVE",520); say("MOVE",0);
-  setTimeout(()=>{ if(gen!==g||state!=="play")return; bigMsg("OR DIE",520); say("OR DIE",0); },560);
-  setTimeout(()=>{ if(gen!==g||state!=="play")return; bigMsg("WAVE "+wave,800); spawnWave(wave); },1300);
+  const g=gen, clearedEmergency=emergency;
+  wave++;
+  const nextEmergency=wave>=3&&!clearedEmergency&&!previousEmergency&&Math.random()<Math.min(0.52,0.36+(wave-3)*0.045);
+  state="intermission";
+  const phrase=clearedEmergency?"EMERGENCY COMPLETE":nextEmergency?"EMERGENCY":"MOVE";
+  const duration=clearedEmergency||nextEmergency?3600:1300;
+  for(let i=0;i<(clearedEmergency||nextEmergency?4:1);i++){
+    setTimeout(()=>{if(gen===g&&state==="intermission"){bigMsg(phrase,520);say(phrase,0);}},i*880);
+  }
+  if(clearedEmergency){ emergency=false; setMusic("game"); flash=1; }
+  else if(nextEmergency){ emergency=true; setMusic("emergency"); flash=1; }
+  setTimeout(()=>{
+    if(gen!==g||state!=="intermission")return;
+    previousEmergency=clearedEmergency;
+    emergency=nextEmergency;
+    if(!emergency)setMusic("game");
+    state="play"; bigMsg("WAVE "+wave,800); spawnWave(wave);
+  },duration);
 }
 function playerDie(){
   if(state!=="play")return;
@@ -403,6 +452,7 @@ function playerDie(){
 // ---------------- input ----------------
 addEventListener("keydown",e=>{keys[e.code]=true; if(e.code==="KeyR"&&state!=="title")startGame();});
 addEventListener("keyup",e=>{keys[e.code]=false;});
+let mouseDown=false;
 cv.addEventListener("click",()=>{
   initAudio(); if(actx.state==="suspended")actx.resume();
   if(document.pointerLockElement!==cv){ cv.requestPointerLock(); }
@@ -414,7 +464,8 @@ addEventListener("mousemove",e=>{
   P.pitch = Math.max(-1.45,Math.min(1.45,P.pitch - e.movementY*0.0024));
   turnKick = Math.min(0.22, turnKick + Math.abs(e.movementX)*0.0005 + Math.abs(e.movementY)*0.0005);
 });
-addEventListener("mousedown",e=>{ if(e.button===0&&state==="play"&&document.pointerLockElement===cv) shoot(); });
+addEventListener("mousedown",e=>{ if(e.button===0){mouseDown=true; if(state==="play"&&document.pointerLockElement===cv)shoot();} });
+addEventListener("mouseup",e=>{if(e.button===0)mouseDown=false;});
 
 function basis(){
   const cy=Math.cos(P.yaw),sy=Math.sin(P.yaw),cp=Math.cos(P.pitch),sp=Math.sin(P.pitch);
@@ -424,7 +475,7 @@ function basis(){
 }
 function shoot(){
   if(cool>0)return;
-  cool=0.26; flash=1; shake=0.35; tsBoost=Math.min(0.6,tsBoost+0.45); kick=Math.min(1,kick+0.4);
+  cool=Math.max(0.055,0.26-(wave-1)*0.022); flash=1; shake=0.35; tsBoost=Math.min(0.6,tsBoost+0.45); kick=Math.min(1,kick+0.4);
   sfxShoot();
   const {f,r,u}=basis();
   const ro=[P.x,P.y,P.z];
@@ -434,18 +485,21 @@ function shoot(){
     const t=rayBox(ro,f,b); if(t>0&&t<tWall)tWall=t;
   }
   if(f[1]<-0.001){ const t=(0-P.y)/f[1]; if(t>0&&t<tWall)tWall=t; }
-  let hit=-1,hitT=tWall;
+  let hit=-1,hitT=tWall,hitY=0;
   enemies.forEach((e,i)=>{
     if(!e.alive)return;
     const by=-1.9*(1-Math.min(1,e.spawn));
     const t=rayBox(ro,f,[e.x-0.5,by,e.z-0.5,e.x+0.5,by+1.9,e.z+0.5]);
-    if(t>0&&t<hitT){hitT=t;hit=i;}
+    if(t>0&&t<hitT){hitT=t;hit=i;hitY=ro[1]+f[1]*t;}
   });
   const mx=P.x+f[0]*0.5+r[0]*0.14-u[0]*0.1, my=P.y+f[1]*0.5-0.08, mz=P.z+f[2]*0.5+r[2]*0.14;
   tracer(mx,my,mz,f[0],f[1],f[2],hitT-0.4);
   if(hit>=0){
     const e=enemies[hit]; e.alive=false; kills++;
-    shatter(e.x,1.1,e.z,64); sfxShatter(); kick=1;
+    const baseY=-1.9*(1-Math.min(1,e.spawn));
+    const headshot=hitY>baseY+1.43;
+    const ix=P.x+f[0]*hitT, iy=hitY, iz=P.z+f[2]*hitT;
+    shatter(e.x,1.1,e.z,64); impactBurst(ix,iy,iz,headshot?130:78); sfxChime(headshot?3:1); sfxShatter(); kick=1;
     if(enemies.every(a=>!a.alive)) nextWave();
   } else if(hitT<69){
     sparks(P.x+f[0]*hitT,P.y+f[1]*hitT,P.z+f[2]*hitT,10); sfxSpark();
@@ -457,7 +511,8 @@ let stepT=0;
 function update(dt){
   cool=Math.max(0,cool-dt); flash*=Math.pow(0.0001,dt); shake*=Math.pow(0.001,dt);
   kick*=Math.pow(0.01,dt); turnKick*=Math.pow(0.0005,dt); tsBoost=Math.max(0,tsBoost-dt*2.2);
-  if(state!=="play"){ ts+= (0.55-ts)*Math.min(1,dt*4); if(state==="dead")dead=Math.min(1,dead+dt*2); return; }
+  if(state==="title"||state==="dead"){ ts+= (0.55-ts)*Math.min(1,dt*4); if(state==="dead")dead=Math.min(1,dead+dt*2); return; }
+  if(state==="play"&&mouseDown&&document.pointerLockElement===cv) shoot();
 
   // player movement (real time)
   const cy=Math.cos(P.yaw),sy=Math.sin(P.yaw);
@@ -465,19 +520,24 @@ function update(dt){
   if(keys.KeyW){ax+=sy;az+=cy;} if(keys.KeyS){ax-=sy;az-=cy;}
   if(keys.KeyD){ax+=cy;az-=sy;} if(keys.KeyA){ax-=cy;az+=sy;}
   const al=Math.hypot(ax,az)||1; ax/=al; az/=al;
-  const SPD=6.5, ACC=40;
+  const sprint=keys.ShiftLeft||keys.ShiftRight;
+  const SPD=sprint?10.2:6.5, ACC=40;
   P.vx += (ax*SPD-P.vx)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
   P.vz += (az*SPD-P.vz)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
   P.x+=P.vx*dt; P.z+=P.vz*dt;
   [P.x,P.z]=pushCircle(P.x,P.z,0.55);
+  if(keys.Space&&P.jump<=0.001){P.vy=7.2;sfxStep();}
+  P.vy-=19*dt; P.jump=Math.max(0,P.jump+P.vy*dt);
+  if(P.jump===0&&P.vy<0)P.vy=0;
   const speed=Math.hypot(P.vx,P.vz);
-  P.bob+=speed*dt*1.8; P.y=1.6+Math.sin(P.bob)*0.045*(speed/SPD);
+  P.bob+=speed*dt*1.8; P.y=1.6+P.jump+Math.sin(P.bob)*0.045*(speed/SPD);
   stepT-=speed*dt; if(stepT<0&&speed>2){stepT=1.7;sfxStep();}
 
   // SUPERHOT time
   const target=0.055+0.945*Math.min(1,speed/SPD);
   ts += (Math.min(1,target+tsBoost+turnKick)-ts)*Math.min(1,dt*11);
   const wdt=dt*ts;
+  if(state!=="play") return;
 
   // enemies
   for(const e of enemies){
@@ -487,27 +547,31 @@ function update(dt){
     const dx=P.x-e.x,dz=P.z-e.z,dist=Math.hypot(dx,dz);
     e.yaw=Math.atan2(dx,dz);
     e.wob+=wdt*2.1;
-    const spd=2.1+wave*0.18;
-    if(dist>6.2){
-      const sx=Math.cos(e.wob)*0.7;
-      let nx=e.x+(dx/dist*spd + Math.cos(e.yaw)*sx)*wdt;
-      let nz=e.z+(dz/dist*spd - Math.sin(e.yaw)*sx)*wdt;
-      [nx,nz]=pushCircle(nx,nz,0.5); e.x=nx;e.z=nz;
-      e.phase+=wdt*9;
-    } else if(dist>1.35){
-      let nx=e.x+dx/dist*spd*0.35*wdt, nz=e.z+dz/dist*spd*0.35*wdt;
-      [nx,nz]=pushCircle(nx,nz,0.5); e.x=nx;e.z=nz;
-      e.phase+=wdt*4;
-      e.fire-=wdt;
-      if(e.fire<=0&&ebullets.length<MAXB){
-        e.fire=Math.max(0.8,1.8-wave*0.08);
-        const bx=e.x,by=1.5,bz=e.z;
-        const tdx=P.x-bx,tdy=P.y-0.15-by,tdz=P.z-bz;
-        const l=Math.hypot(tdx,tdy,tdz)||1;
-        ebullets.push({x:bx,y:by,z:bz,dx:tdx/l,dy:tdy/l,dz:tdz/l,life:7});
-        blip(300,120,0.12,0.25,"sawtooth");
+    const difficulty=waveDifficulty(wave), emergencyBoost=emergency?1.42:1, spd=difficulty.speed*emergencyBoost;
+    const lateral=P.vx*(-dz/dist)+P.vz*(dx/dist);
+    e.shift-=wdt;
+    if(e.shift<=0){ e.strafe=(lateral>=0?-1:1)*(Math.random()<0.72?1:-1); e.shift=rnd(0.35,1.15); }
+    const approach=dist>6.2?0.82:0.2;
+    const weave=e.strafe*(0.6+0.28*Math.sin(e.wob));
+    let nx=e.x+(dx/dist*spd*approach-dz/dist*spd*weave)*wdt;
+    let nz=e.z+(dz/dist*spd*approach+dx/dist*spd*weave)*wdt;
+    [nx,nz]=pushCircle(nx,nz,0.5); e.x=nx;e.z=nz;
+    e.phase+=wdt*(dist>6.2?9:5);
+    e.fire-=wdt;
+    if(e.fire<=0&&ebullets.length<MAXB){
+      e.fire=difficulty.cadence/emergencyBoost*rnd(0.82,1.18);
+      const bx=e.x,by=1.5,bz=e.z, burst=difficulty.burst+(emergency?2:0);
+      const lead=Math.min(0.55,dist/7.5);
+      const tdx=P.x+P.vx*lead-bx,tdy=P.y+P.vy*lead-0.15-by,tdz=P.z+P.vz*lead-bz;
+      const l=Math.hypot(tdx,tdy,tdz)||1;
+      for(let shot=0;shot<burst&&ebullets.length<MAXB;shot++){
+        const spread=(shot-(burst-1)*0.5)*0.09+rnd(-0.025,0.025);
+        const vx=tdx/l-tdz/l*spread, vy=tdy/l+rnd(-0.012,0.012), vz=tdz/l+tdx/l*spread;
+        const vl=Math.hypot(vx,vy,vz);
+        ebullets.push({x:bx,y:by,z:bz,dx:vx/vl,dy:vy/vl,dz:vz/vl,life:7});
+        sfxPew();
       }
-    } else { playerDie(); return; }
+    }
     if(dist<1.35){ playerDie(); return; }
   }
 
@@ -560,6 +624,7 @@ function render(time){
   gl.useProgram(pScene);
   gl.uniform2f(U(pScene,"uRes"),LW,LH);
   gl.uniform1f(U(pScene,"uTime"),time);
+  gl.uniform1f(U(pScene,"uEmergency"),emergency?1:0);
   gl.uniform3fv(U(pScene,"uCamP"),cam);
   gl.uniform3fv(U(pScene,"uFwd"),f); gl.uniform3fv(U(pScene,"uRight"),r); gl.uniform3fv(U(pScene,"uUp"),u);
   gl.uniform4fv(U(pScene,"uEn"),enArr); gl.uniform4fv(U(pScene,"uEs"),esArr); gl.uniform4fv(U(pScene,"uBl"),blArr);
@@ -577,6 +642,7 @@ function render(time){
   gl.uniform2f(U(pPost,"uLow"),LW,LH);
   gl.uniform1f(U(pPost,"uTS"),ts); gl.uniform1f(U(pPost,"uFlash"),flash);
   gl.uniform1f(U(pPost,"uDead"),dead); gl.uniform1f(U(pPost,"uKick"),kick);
+  gl.uniform1f(U(pPost,"uEmergency"),emergency?1:0); gl.uniform1f(U(pPost,"uTime"),time);
   gl.bindBuffer(gl.ARRAY_BUFFER,quad);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
   gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2);
@@ -612,7 +678,7 @@ function render(time){
 
   // HUD
   if(state==="play"){
-    $("top").textContent="WAVE "+wave+"   KILLS "+kills+"   BEST "+best;
+    $("top").textContent=(emergency?"EMERGENCY   ":"")+"WAVE "+wave+"   KILLS "+kills+"   BEST "+best;
     $("tsf").style.width=(ts*100).toFixed(0)+"%";
     if(document.pointerLockElement!==cv){$("sub").textContent="CLICK TO RESUME";}
     else if($("sub").textContent==="CLICK TO RESUME"){$("sub").textContent="";}
