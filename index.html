@@ -287,6 +287,14 @@ function setMusic(track){
   }
   active.play().catch(()=>{});
 }
+// mobile browsers only allow media playback started inside a user gesture; prime every track once
+let audioUnlocked=false;
+function unlockAudio(){
+  if(audioUnlocked)return; audioUnlocked=true;
+  for(const m of [menuMusic,gameMusic,emergencyMusic]){
+    try{ const p=m.play(); if(p&&p.catch)p.catch(()=>{}); m.pause(); m.currentTime=0; }catch(e){}
+  }
+}
 setMusic("menu");
 
 // ---------------- audio (all procedural) ----------------
@@ -470,9 +478,9 @@ addEventListener("keydown",e=>{keys[e.code]=true; if(e.code==="KeyR"&&state!=="t
 addEventListener("keyup",e=>{keys[e.code]=false;});
 let mouseDown=false;
 cv.addEventListener("click",()=>{
-  initAudio(); if(actx.state==="suspended")actx.resume();
-  if(document.pointerLockElement!==cv){ cv.requestPointerLock(); }
-  if(state==="title"||state==="dead"){ startGame(); return; }
+  initAudio(); unlockAudio(); if(actx.state==="suspended")actx.resume();
+  if(state==="title"||state==="dead"){ startGame(); }
+  if(!touchOn && document.pointerLockElement!==cv){ try{ cv.requestPointerLock(); }catch(e){} }
 });
 addEventListener("mousemove",e=>{
   if(document.pointerLockElement!==cv)return;
@@ -501,7 +509,7 @@ function bindStick(id,side){
     if(side==="move"){mobileMoveX=0;mobileMoveY=0;}
   }
   stick.addEventListener("pointerdown",event=>{
-    event.preventDefault(); initAudio(); if(actx.state==="suspended")actx.resume();
+    event.preventDefault(); initAudio(); unlockAudio(); if(actx.state==="suspended")actx.resume();
     if(state==="title"||state==="dead")startGame();
     pointerId=event.pointerId; startX=lastX=event.clientX; startY=lastY=event.clientY; started=performance.now(); stick.setPointerCapture(pointerId);
   });
