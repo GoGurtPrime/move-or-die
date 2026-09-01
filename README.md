@@ -4,6 +4,8 @@ A fast, browser-based raymarched arena shooter. Time moves when you do. Clear es
 
 ## Play
 
+### ▶ [**CLICK HERE TO PLAY**](https://gogurtprime.github.io/move-or-die)
+
 Open `index.html` in a modern browser, or use the published GitHub Pages URL.
 
 Desktop controls:
