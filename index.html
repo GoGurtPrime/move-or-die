@@ -6,8 +6,8 @@
 <title>MOVE OR DIE</title>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-  html,body{margin:0;padding:0;overflow:hidden;background:#000;height:100%;cursor:crosshair;touch-action:none;overscroll-behavior:none}
-  canvas{display:block;width:100vw;height:100vh}
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;width:100%;height:100%;position:fixed;inset:0;cursor:crosshair;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none}
   #hud{position:fixed;inset:0;pointer-events:none;font-family:'Press Start 2P',monospace;color:#111}
   #top{position:absolute;top:14px;left:0;right:0;text-align:center;font-size:13px;color:#b3121a;text-shadow:0 0 8px rgba(255,0,0,.35)}
   #big{position:absolute;top:34%;left:0;right:0;text-align:center;font-size:8vw;color:#e01018;letter-spacing:.05em;text-shadow:4px 4px 0 #1a0000, 0 0 30px rgba(255,20,20,.5)}
@@ -15,12 +15,15 @@
   #cross{position:absolute;top:50%;left:50%;width:6px;height:6px;margin:-3px;background:#e01018;box-shadow:0 0 6px rgba(255,0,0,.8)}
   #tsw{position:absolute;bottom:22px;left:50%;width:220px;margin-left:-110px;height:10px;background:rgba(0,0,0,.25);outline:2px solid rgba(0,0,0,.4)}
   #tsf{height:100%;width:100%;background:#e01018}
-  #touchControls{display:none;position:fixed;inset:0;z-index:2;pointer-events:none}
+  #touchControls{display:none;position:fixed;inset:0;z-index:3;pointer-events:none}
   #touchControls.active{display:block}
-  .stick{position:absolute;bottom:max(28px,env(safe-area-inset-bottom));width:120px;height:120px;border:2px solid rgba(255,255,255,.7);border-radius:50%;background:radial-gradient(circle at center,rgba(255,255,255,.22),rgba(180,210,255,.1) 42%,rgba(255,255,255,.035) 70%);box-shadow:inset 0 0 26px rgba(255,255,255,.24),0 0 20px rgba(190,220,255,.24);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);pointer-events:auto;touch-action:none}
-  .stick:first-child{left:28px}.stick:last-child{right:28px}
-  .stick::after{content:"";position:absolute;left:36px;top:36px;width:46px;height:46px;border:1px solid rgba(255,255,255,.82);border-radius:50%;background:radial-gradient(circle at 35% 28%,rgba(255,255,255,.9),rgba(225,240,255,.42) 34%,rgba(140,180,230,.22));box-shadow:0 3px 12px rgba(0,0,0,.32),inset 0 0 10px rgba(255,255,255,.7);transform:translate(var(--stick-x,0px),var(--stick-y,0px));transition:transform .08s linear}
-  @media (max-width:700px),(pointer:coarse){#tsw{bottom:156px}.stick{bottom:max(26px,env(safe-area-inset-bottom))}}
+  .stick{position:absolute;bottom:max(30px,env(safe-area-inset-bottom));width:132px;height:132px;border:2px solid rgba(255,255,255,.9);border-radius:50%;background:radial-gradient(circle at 50% 42%,rgba(255,255,255,.42),rgba(200,220,255,.16) 46%,rgba(255,255,255,.05) 72%);box-shadow:inset 0 0 30px rgba(255,255,255,.4),0 0 0 3px rgba(0,0,0,.32),0 6px 26px rgba(0,0,0,.45);backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);pointer-events:auto;touch-action:none}
+  .stick:first-child{left:30px}.stick:last-child{right:30px}
+  .stick::after{content:"";position:absolute;left:39px;top:39px;width:52px;height:52px;border:1px solid rgba(255,255,255,.92);border-radius:50%;background:radial-gradient(circle at 35% 28%,rgba(255,255,255,.96),rgba(228,242,255,.5) 34%,rgba(150,185,235,.28));box-shadow:0 4px 14px rgba(0,0,0,.45),0 0 0 2px rgba(0,0,0,.22),inset 0 0 12px rgba(255,255,255,.8);transform:translate(var(--stick-x,0px),var(--stick-y,0px));transition:transform .07s linear}
+  #mobileToggle{position:absolute;bottom:16px;left:0;right:0;text-align:center;font-family:'Press Start 2P',monospace;font-size:11px;color:#1a1a1a;text-shadow:1px 1px 0 #fff;pointer-events:auto;cursor:pointer;user-select:none}
+  #mobileToggle input{width:18px;height:18px;margin-right:9px;vertical-align:middle;accent-color:#e01018;cursor:pointer}
+  @media (max-width:760px),(pointer:coarse){#tsw{bottom:168px}.stick{bottom:max(28px,env(safe-area-inset-bottom))}}
+  @media (max-height:520px){#big{top:20%;font-size:11vw}#sub{top:50%;font-size:11px;line-height:1.7}}
   .hide{display:none}
 </style>
 </head>
@@ -36,6 +39,7 @@
   <div id="sub">TIME MOVES WHEN YOU MOVE<br><br>WASD MOVE &nbsp; MOUSE AIM &nbsp; CLICK SHOOT<br>ONE HIT KILLS. EVERYONE. INCLUDING YOU.<br><br>CLICK TO BEGIN</div>
   <div id="cross" class="hide"></div>
   <div id="tsw" class="hide"><div id="tsf"></div></div>
+  <label id="mobileToggle" class="hide"><input type="checkbox" id="mobileCheck">MOBILE CONTROLS</label>
 </div>
 <script>
 "use strict";
@@ -269,8 +273,8 @@ let state="title", wave=0, kills=0, best=+(localStorage.vcBest||0);
 let ts=1, tsBoost=0, turnKick=0, flash=0, shake=0, kick=0, dead=0, cool=0, gen=0;
 let emergency=false, previousEmergency=false;
 const keys={};
-const mobile=navigator.maxTouchPoints>0||matchMedia("(any-pointer:coarse)").matches||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-let mobileMoveX=0,mobileMoveY=0;
+const mobile=navigator.maxTouchPoints>0||matchMedia("(any-pointer:coarse)").matches||/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+let touchOn=false, mobileMoveX=0, mobileMoveY=0;
 const $=id=>document.getElementById(id);
 const menuMusic=$("menuMusic"), gameMusic=$("gameMusic"), emergencyMusic=$("emergencyMusic");
 
@@ -425,6 +429,7 @@ function startGame(){
   parts=[]; spawnWave(wave);
   $("big").textContent=""; $("sub").textContent="";
   $("cross").classList.remove("hide"); $("tsw").classList.remove("hide");
+  $("mobileToggle").classList.add("hide");
   bigMsg("WAVE 1",900);
   say("MOVE",50); say("OR DIE",600);
 }
@@ -457,6 +462,7 @@ function playerDie(){
   best=Math.max(best,kills); localStorage.vcBest=best;
   $("big").textContent="SHATTERED";
   $("sub").innerHTML="KILLS "+kills+" &nbsp; BEST "+best+"<br><br>CLICK TO REWIND";
+  if(!mobile)$("mobileToggle").classList.remove("hide");
 }
 
 // ---------------- input ----------------
@@ -476,40 +482,52 @@ addEventListener("mousemove",e=>{
 });
 addEventListener("mousedown",e=>{ if(e.button===0){mouseDown=true; if(state==="play"&&document.pointerLockElement===cv)shoot();} });
 addEventListener("mouseup",e=>{if(e.button===0)mouseDown=false;});
-if(mobile){
-  document.body.classList.add("mobile");
-  $("touchControls").classList.add("active");
-  document.addEventListener("gesturestart",event=>event.preventDefault(),{passive:false});
-  function bindStick(id,side){
-    const stick=$(id), radius=42;
-    let pointerId=null,startX=0,startY=0,lastX=0,lastY=0,started=0;
-    function reset(){
-      pointerId=null; stick.style.setProperty("--stick-x","0px"); stick.style.setProperty("--stick-y","0px");
-      if(side==="move"){mobileMoveX=0;mobileMoveY=0;}
-    }
-    stick.addEventListener("pointerdown",event=>{
-      event.preventDefault(); initAudio(); if(actx.state==="suspended")actx.resume();
-      if(state==="title"||state==="dead")startGame();
-      pointerId=event.pointerId; startX=lastX=event.clientX; startY=lastY=event.clientY; started=performance.now(); stick.setPointerCapture(pointerId);
-    });
-    stick.addEventListener("pointermove",event=>{
-      if(event.pointerId!==pointerId)return;
-      const dx=event.clientX-startX,dy=event.clientY-startY, length=Math.hypot(dx,dy),scale=Math.min(1,radius/(length||1));
-      const x=dx*scale,y=dy*scale;
-      stick.style.setProperty("--stick-x",x+"px"); stick.style.setProperty("--stick-y",y+"px");
-      if(side==="move"){mobileMoveX=x/radius;mobileMoveY=-y/radius;}
-      else {P.yaw+=(event.clientX-lastX)*0.012;P.pitch=Math.max(-1.45,Math.min(1.45,P.pitch-(event.clientY-lastY)*0.012));}
-      lastX=event.clientX;lastY=event.clientY;
-    });
-    stick.addEventListener("pointerup",event=>{
-      if(event.pointerId!==pointerId)return;
-      const tap=Math.hypot(event.clientX-startX,event.clientY-startY)<12&&performance.now()-started<230;
-      if(tap&&state==="play"){if(side==="move"&&P.jump<=0.001){P.vy=7.2;sfxStep();}if(side==="look")shoot();}
-      reset();
-    });
-    stick.addEventListener("pointercancel",reset);
+// block pinch-zoom, double-tap-zoom and page scrolling on touch devices
+document.addEventListener("gesturestart",e=>e.preventDefault(),{passive:false});
+document.addEventListener("gesturechange",e=>e.preventDefault(),{passive:false});
+addEventListener("touchmove",e=>{if(e.touches.length>1)e.preventDefault();},{passive:false});
+let lastTouchEnd=0;
+addEventListener("touchend",e=>{const n=performance.now(); if(n-lastTouchEnd<320)e.preventDefault(); lastTouchEnd=n;},{passive:false});
+function setTouchControls(on){
+  touchOn=on;
+  $("touchControls").classList.toggle("active",on);
+  document.body.classList.toggle("mobile",on);
+}
+function bindStick(id,side){
+  const stick=$(id), radius=46;
+  let pointerId=null,startX=0,startY=0,lastX=0,lastY=0,started=0;
+  function reset(){
+    pointerId=null; stick.style.setProperty("--stick-x","0px"); stick.style.setProperty("--stick-y","0px");
+    if(side==="move"){mobileMoveX=0;mobileMoveY=0;}
   }
-  bindStick("moveStick","move"); bindStick("lookStick","look");
+  stick.addEventListener("pointerdown",event=>{
+    event.preventDefault(); initAudio(); if(actx.state==="suspended")actx.resume();
+    if(state==="title"||state==="dead")startGame();
+    pointerId=event.pointerId; startX=lastX=event.clientX; startY=lastY=event.clientY; started=performance.now(); stick.setPointerCapture(pointerId);
+  });
+  stick.addEventListener("pointermove",event=>{
+    if(event.pointerId!==pointerId)return;
+    const dx=event.clientX-startX,dy=event.clientY-startY, length=Math.hypot(dx,dy),scale=Math.min(1,radius/(length||1));
+    const x=dx*scale,y=dy*scale;
+    stick.style.setProperty("--stick-x",x+"px"); stick.style.setProperty("--stick-y",y+"px");
+    if(side==="move"){mobileMoveX=x/radius;mobileMoveY=-y/radius;}
+    else {P.yaw+=(event.clientX-lastX)*0.012;P.pitch=Math.max(-1.45,Math.min(1.45,P.pitch-(event.clientY-lastY)*0.012));}
+    lastX=event.clientX;lastY=event.clientY;
+  });
+  stick.addEventListener("pointerup",event=>{
+    if(event.pointerId!==pointerId)return;
+    const tap=Math.hypot(event.clientX-startX,event.clientY-startY)<12&&performance.now()-started<230;
+    if(tap&&state==="play"){if(side==="move"&&P.jump<=0.001){P.vy=7.2;sfxStep();}if(side==="look")shoot();}
+    reset();
+  });
+  stick.addEventListener("pointercancel",reset);
+}
+bindStick("moveStick","move"); bindStick("lookStick","look");
+setTouchControls(mobile);
+if(!mobile){
+  const check=$("mobileCheck");
+  $("mobileToggle").classList.remove("hide");
+  check.addEventListener("change",()=>setTouchControls(check.checked));
 }
 
 function basis(){
@@ -566,7 +584,7 @@ function update(dt){
   if(keys.KeyD){ax+=cy;az-=sy;} if(keys.KeyA){ax-=cy;az+=sy;}
   ax+=sy*mobileMoveY+cy*mobileMoveX; az+=cy*mobileMoveY-sy*mobileMoveX;
   const al=Math.hypot(ax,az)||1; ax/=al; az/=al;
-  const sprint=!mobile&&(keys.ShiftLeft||keys.ShiftRight);
+  const sprint=!touchOn&&(keys.ShiftLeft||keys.ShiftRight);
   const SPD=sprint?10.2:6.5, ACC=40;
   P.vx += (ax*SPD-P.vx)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
   P.vz += (az*SPD-P.vz)*Math.min(1,dt*ACC/SPD*(ax||az?1:2));
