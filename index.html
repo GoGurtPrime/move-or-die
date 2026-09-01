@@ -575,7 +575,7 @@ function update(dt){
   cool=Math.max(0,cool-dt); flash*=Math.pow(0.0001,dt); shake*=Math.pow(0.001,dt);
   kick*=Math.pow(0.01,dt); turnKick*=Math.pow(0.0005,dt); tsBoost=Math.max(0,tsBoost-dt*2.2);
   if(state==="title"||state==="dead"){ ts+= (0.55-ts)*Math.min(1,dt*4); if(state==="dead")dead=Math.min(1,dead+dt*2); return; }
-  if(state==="play"&&mouseDown&&document.pointerLockElement===cv) shoot();
+  if(state==="play"&&mouseDown&&(touchOn||document.pointerLockElement===cv)) shoot();
 
   // player movement (real time)
   const cy=Math.cos(P.yaw),sy=Math.sin(P.yaw);
@@ -744,7 +744,7 @@ function render(time){
   if(state==="play"){
     $("top").textContent=(emergency?"EMERGENCY   ":"")+"WAVE "+wave+"   KILLS "+kills+"   BEST "+best;
     $("tsf").style.width=(ts*100).toFixed(0)+"%";
-    if(document.pointerLockElement!==cv){$("sub").textContent="CLICK TO RESUME";}
+    if(!touchOn&&document.pointerLockElement!==cv){$("sub").textContent="CLICK TO RESUME";}
     else if($("sub").textContent==="CLICK TO RESUME"){$("sub").textContent="";}
   }
 }
@@ -753,7 +753,7 @@ function render(time){
 let last=performance.now();
 function loop(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
-  if(state!=="play"||document.pointerLockElement===cv) update(dt);
+  if(state!=="play"||touchOn||document.pointerLockElement===cv) update(dt);
   render(now/1000);
   requestAnimationFrame(loop);
 }
